@@ -1,0 +1,25 @@
+# This file lists the direct dependencies for the Howie project.
+# Use `pip-compile` from `pip-tools` to generate a `requirements.txt` file
+
+#Core Application
+fastapi
+uvicorn[standard]
+pydantic
+
+# AI & Data
+google-genai
+google-cloud-aiplatform
+google-cloud-storage
+
+# LlamaIndex Core & Specific Integrations
+llama-index-core
+llama-index-vector-stores-vertexaivectorsearch
+llama-index-embeddings-vertex
+llama-index-llms-vertex
+llama-index-llms-google-genai
+
+# Utilities
+python-dotenv
+shapely
+tomli
+

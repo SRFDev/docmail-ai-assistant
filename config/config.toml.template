@@ -1,0 +1,43 @@
+# Configuration for the AI Assistant Project
+
+[gcp]
+# Google Cloud Platform configuration
+gcp_project_id = "YOUR_GCP_PROJECT_ID_HERE"
+gcp_region = "us-east4"
+gcs_bucket_name = "YOUR_GCS_BUCKET_NAME_HERE"
+
+[data_sources]
+# Paths to the raw data used for ingestion
+pdf_src_path = "YOUR_PDF_SRC_PATH_HERE"
+pdf_dest_path = "YOUR_PDF_DEST_PATH_HERE"
+video_gcs_uri = "YOUR_VIDEO_GCS_URI_HERE"
+video_src_path = "YOUR_VIDEO_SRC_PATH_HERE"
+video_dest_path = "YOUR_VIDEO_DEST_PATH_HERE"
+video_mime_type = "video/mp4"
+
+[llm]
+# Language model configuration
+model_name = "gemini-2.5-pro"
+embedding_model_name = "gemini-embedding-001" # For LlamaIndex
+
+[rag_tuning]
+# Parameters for the RAG ingestion and retrieval process
+chunk_size = 256
+chunk_overlap = 20
+top_k_retrieval = 3 # Retrieve the top 3 most relevant chunks
+
+[vector_search]
+# Configuration for the vector search index
+vs_index_name = "YOUR_VS_INDEX_NAME_HERE"
+vs_index_deployment_name = "YOUR_VS_INDEX_DEPLOYMENT_NAME_HERE"
+vs_index_endpoint_name = "YOUR_VS_INDEX_ENDPOINT_NAME_HERE"
+vs_dimensions = 3072
+insert_batch_size = 512
+
+[prompts]
+# Prompt management configuration
+prompts_path = "./prompts/prompts.toml"
+
+[api]
+backend_url = "http://127.0.0.1:8000"
+

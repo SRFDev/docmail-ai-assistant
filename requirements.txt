@@ -1,0 +1,23 @@
+# Core
+python-dotenv
+tomli; python_version < "3.11"
+pydantic>=2.0
+
+# AWS SDK
+boto3
+
+# LlamaIndex (The V0.10+ Modular Stack)
+llama-index-core
+llama-index-llms-bedrock
+llama-index-embeddings-bedrock
+llama-index-vector-stores-chroma
+llama-index-readers-file
+
+# Database
+chromadb
+watchdog
+
+# Web / API
+streamlit
+fastapi
+uvicorn

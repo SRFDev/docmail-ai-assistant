@@ -1,0 +1,14 @@
+# This file lists the direct dependencies for the Howie project.
+# Use `pip-compile` from `pip-tools` to generate a `requirements.txt` file
+
+# tell pip-tools to include all backend requirements
+-r requirements.in 
+
+llama-index-readers-file
+unstructured[pdf]
+Pillow
+instructor
+
+# Video & Transcript
+youtube-transcript-api
+yt-dlp
