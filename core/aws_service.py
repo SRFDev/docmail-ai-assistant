@@ -61,8 +61,9 @@ class AwsService:
                 model=self.llm_model_id,
                 profile_name='docmail',
                 region_name=self.region,
-                context_size=200000, # Sonnet has a huge context window
-                temperature=0.7
+                context_size=200000, 
+                temperature=0.7,
+                max_tokens=4096  # <--- FIX: ADD THIS LINE (Was likely defaulting to 512)
             )
             # Bind to global Settings for LlamaIndex convenience
             Settings.llm = self._llm
