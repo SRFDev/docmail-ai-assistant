@@ -1,6 +1,6 @@
 # Copyright © 2025 SRF Development, Inc. All rights reserved.
 #
-# This file is part of the "Howie AI Assistant" project.
+# This file is part of the "DocMail AI Assistant" project.
 #
 # This project is free software: you can redistribute it and/or modify
 # it under the terms of the MIT License as published by the Open Source

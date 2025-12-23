@@ -1,10 +1,10 @@
+import os
 import logging
 import boto3
 from llama_index.llms.bedrock import Bedrock
 from llama_index.embeddings.bedrock import BedrockEmbedding
 from llama_index.core import Settings
 
-# Assuming you have a similar config setup as Howie
 # If not, we can simplify this import later.
 from config.loader import AppConfig 
 
@@ -26,11 +26,17 @@ class AwsService:
         self._llm = None
         self._embed_model = None
         
-        # AWS Configuration
-        # We use the profile we created: 'docmail'
-        self.session = boto3.Session(profile_name='docmail')
+       # AWS Configuration Logic
+        # If keys are in the environment (Docker/Prod), don't use a profile.
+        # If no keys, assume local dev and use 'docmail'.
+        if os.getenv("AWS_ACCESS_KEY_ID"):
+            self.profile_name = None 
+        else:
+            self.profile_name = 'docmail'
+            
+        self.session = boto3.Session(profile_name=self.profile_name)
         self.region = "us-east-1"
-        
+
         # The ID we just validated
         self.llm_model_id = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
         self.embed_model_id = "amazon.titan-embed-text-v2:0" # Standard, cheap, effective
@@ -59,7 +65,7 @@ class AwsService:
             logger.info(f"Initializing Bedrock LLM: {self.llm_model_id}")
             self._llm = Bedrock(
                 model=self.llm_model_id,
-                profile_name='docmail',
+                profile_name=self.profile_name,
                 region_name=self.region,
                 context_size=200000, 
                 temperature=0.7,
@@ -76,7 +82,7 @@ class AwsService:
             logger.info(f"Initializing Bedrock Embeddings: {self.embed_model_id}")
             self._embed_model = BedrockEmbedding(
                 model_name=self.embed_model_id,
-                profile_name='docmail',
+                profile_name=self.profile_name,
                 region_name=self.region
             )
             # Bind to global Settings

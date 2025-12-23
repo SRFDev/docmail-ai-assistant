@@ -1,4 +1,4 @@
-# This file lists the direct dependencies for the Howie project.
+# This file lists the direct dependencies for the DocMail project.
 # Use `pip-compile` from `pip-tools` to generate a `requirements.txt` file
 
 #Core Application

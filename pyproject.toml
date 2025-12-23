@@ -1,8 +1,8 @@
 [project]
-name = "howie-assistant"
+name = "docmail-assistant"
 version = "0.1.0"
-description = "A multimodal AI assistant for product knowledge."
+description = "An AI assistant for drafting medical emails using RAG."
 
 [tool.setuptools.packages.find]
-where = ["."]  # Look for packages in the current directory (the 'howie' root)
+where = ["."]  # Look for packages in the current directory (the 'docmail' root)
 exclude = ["data*", "frontend*"]
