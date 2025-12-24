@@ -214,3 +214,8 @@ deploy_db/
 
 # Logs
 *.log
+
+# Streamlit Secrets
+.streamlit/secrets.toml
+**/secrets.toml
+
