@@ -3,17 +3,16 @@
 
 import logging
 from contextlib import asynccontextmanager
-from typing import List, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 # Custom modules
 from config.loader import AppConfig
 from config.logger_config import setup_logging
 from core.aws_service import AwsService
+from core.runpod_service import RunPodService 
 
 from prompts.manager import initialize_prompt_manager, get_prompt_manager
 from backend.models import DraftRequest, DraftResponse
@@ -26,58 +25,67 @@ import chromadb
 # Configure Logger
 logger = logging.getLogger(__name__)
 
-
-# --- Lifespan Manager ---
+# --- Lifespan Manager (The Brain Factory) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- STARTUP ---
+    setup_logging(logger_name="docmail", log_level="INFO")
     logger.info("INFO:     Starting DocMail application...")
     
-    # 1. Setup logging & Config
-    setup_logging(logger_name="docmail", log_level="INFO")
-    app.state.config = AppConfig()
-    
-    # 2. Initialize AWS Service (Singleton)
-    logger.info(f"INFO:     Initializing AWS Service (Region: {app.state.config.aws_region})...")
-    app.state.aws = AwsService.get_instance(app.state.config)
-    
-    # 3. Wake up Models (Lazy Load Fix)
-    _ = app.state.aws.llm
-    _ = app.state.aws.embed_model
-    
+    # 1. Load Config
     try:
-        # 4. Connect to ChromaDB (The Vector Store)
+        app.state.config = AppConfig()
+    except Exception as e:
+        logger.critical(f"Config Load Failed: {e}")
+        raise e
+    
+    # 2. Initialize AWS Service (ALWAYS REQUIRED)
+    # Why? We need it for 'embed_model' (Titan v2) to talk to ChromaDB, 
+    # even if we are using RunPod for text generation.
+    try:
+        logger.info(f"INFO:     Initializing AWS Infrastructure (Region: {app.state.config.aws_region})...")
+        app.state.aws = AwsService.get_instance(app.state.config)
+    except Exception as e:
+        logger.error(f"AWS Init Failed (Embeddings will be unavailable): {e}")
+
+    # 3. Initialize The LLM Strategy (The "Switch")
+    source = app.state.config.llm_source
+    logger.info(f"INFO:     Selected LLM Strategy: {source.upper()}")
+
+    if source == "runpod":
+        # Strategy A: Fine-Tuned Model
+        app.state.llm_client = RunPodService(
+            api_key=app.state.config.runpod_api_key,
+            endpoint_id=app.state.config.runpod_endpoint_id
+        )
+    else:
+        # Strategy B: General Bedrock Model
+        # Since AwsService implements LLMProvider, we just point to the existing instance
+        app.state.llm_client = app.state.aws
+
+    # 4. Connect to Vector Store (RAG)
+    try:
         logger.info(f"INFO:     Connecting to ChromaDB at {app.state.config.chroma_persist_dir}...")
         db = chromadb.PersistentClient(path=app.state.config.chroma_persist_dir)
         chroma_collection = db.get_collection(app.state.config.collection_name)
         vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
         
-        # 5. Load the Index
-        # (This was the missing variable in the snippet)
-        index = VectorStoreIndex.from_vector_store(vector_store)
-        
-        # 6. Load Prompts (New Batch 2 Logic)
-        logger.info("INFO:     Loading Prompt Manager...")
-        initialize_prompt_manager(app.state.config.prompts_path)
-        prompt_manager = get_prompt_manager()
-        
-        # Retrieve the template string from TOML
-        qa_template_str = prompt_manager.get_prompt("docmail", "rag_system_prompt")
-        qa_template = PromptTemplate(qa_template_str)
-        
-        # 7. Create the Query Engine (The RAG "Brain")
-        logger.info("INFO:     Building RAG Query Engine...")
-        app.state.query_engine = index.as_query_engine(
-            similarity_top_k=app.state.config.top_k_retrieval,
-            response_mode="compact",
-            text_qa_template=qa_template
+        # Load Index using AWS Embeddings
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
+        index = VectorStoreIndex.from_vector_store(
+            vector_store, 
+            storage_context=storage_context,
+            embed_model=app.state.aws.embed_model
         )
-        logger.info("INFO:     Engine Ready.")
+        app.state.index = index
+        logger.info("INFO:     Vector Store Ready.")
         
     except Exception as e:
-        logger.critical(f"CRITICAL: Failed to initialize Vector Store or Prompts: {e}", exc_info=True)
-        # We don't exit(1) here to allow the app to start and return 500s (easier to debug)
-        app.state.query_engine = None
+        logger.warning(f"WARNING: Vector Store/RAG functionality degraded: {e}")
+        app.state.index = None
+
+    # 5. Load Prompts
+    initialize_prompt_manager(app.state.config.prompts_path)
 
     yield
     
@@ -88,12 +96,8 @@ async def lifespan(app: FastAPI):
 # Initialize App
 app = FastAPI(title="DocMail API", lifespan=lifespan)
 
-# CORS (Allow local frontend)
-origins = [
-    "http://localhost:3000",
-    "http://localhost:8501", # Streamlit default port
-]
-
+# CORS
+origins = ["http://localhost:3000", "http://localhost:8501"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -106,36 +110,45 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check():
-    status = "healthy" if app.state.query_engine else "degraded"
-    return {"status": status, "service": "docmail-aws"}
+    rag_status = "active" if app.state.index else "inactive"
+    return {
+        "status": "healthy", 
+        "llm_mode": app.state.config.llm_source,
+        "rag_status": rag_status
+    }
 
 @app.post("/generate", response_model=DraftResponse)
 async def generate_draft(request: DraftRequest):
     """
-    Receives a patient email and returns a RAG-generated draft reply.
+    Receives a patient email and returns a draft reply.
+    Uses the configured LLM Provider (RunPod or Bedrock).
     """
-    if not app.state.query_engine:
-        raise HTTPException(status_code=503, detail="Draft engine is not initialized.")
-        
     logger.info(f"Generating draft for input length: {len(request.patient_email)}")
     
+    # 1. Fetch Prompts (Strategy: Use System Prompt from TOML)
+    prompt_manager = get_prompt_manager()
+
+    if app.state.config.llm_source == "runpod":
+        # Use the simple, tuned prompt for the Fine-Tuned Model
+        system_prompt = prompt_manager.get_prompt("docmail", "physician_system_prompt")
+    else:
+        # Use the complex RAG prompt for generic Bedrock/Claude
+        system_prompt = prompt_manager.get_prompt("docmail", "rag_system_prompt")
+    
+    # 2. Execute Generation (Polymorphic Call)
     try:
-        # Execute RAG Query
-        # Note: In LlamaIndex, 'query' is synchronous by default, but we run it in an async path.
-        # For heavy loads we'd wrap this, but for MVP it's fine.
-        response = app.state.query_engine.query(request.patient_email)
+        # Note: We are passing 'request.patient_email' as the user prompt.
+        # In the full RAG version, we would append context here.
+        draft_text = app.state.llm_client.generate_draft(
+            system_prompt=system_prompt,
+            user_prompt=request.patient_email,
+            max_tokens=1024,
+            temperature=0.6
+        )
         
-        # Extract Sources (for the UI "Transparency" feature)
-        sources = []
-        for node in response.source_nodes:
-            meta = node.metadata
-            # Format: [Cardiology - Statin Side Effects]
-            info = f"[{meta.get('specialty', 'Gen')} - {meta.get('scenario', 'Unknown')}]"
-            sources.append(info)
-            
         return DraftResponse(
-            draft_reply=str(response),
-            source_nodes=sources
+            draft_reply=draft_text,
+            source_nodes=["Fine-Tuned Knowledge" if app.state.config.llm_source == "runpod" else "Bedrock Knowledge"]
         )
         
     except Exception as e:

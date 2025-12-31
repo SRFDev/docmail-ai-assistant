@@ -21,3 +21,12 @@ PATIENT EMAIL:
 
 DRAFT REPLY:
 """
+
+# NEW: Specific prompt for the RunPod/Fine-Tuned Model
+# This matches the "Physician Persona" used during training.
+physician_system_prompt = """You are a helpful physician assistant. 
+Draft a concise, professional, and empathetic response to the patient inquiry. 
+Do not diagnose medical conditions. 
+Refer serious issues to an in-person visit or emergency services immediately.
+"""
+

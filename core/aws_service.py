@@ -1,105 +1,89 @@
-import os
-import logging
+# core/aws_service.py
 import boto3
-from llama_index.llms.bedrock import Bedrock
-from llama_index.embeddings.bedrock import BedrockEmbedding
-from llama_index.core import Settings
+import json
+import logging
+from typing import Optional
+from botocore.exceptions import ClientError
 
-# If not, we can simplify this import later.
-from config.loader import AppConfig 
+# LlamaIndex Imports (for Embeddings)
+from llama_index.embeddings.bedrock import BedrockEmbedding
+
+# Interface
+from core.llm_interface import LLMProvider
 
 logger = logging.getLogger(__name__)
 
-class AwsService:
-    """
-    Centralized service for AWS operations (S3, Bedrock).
-    Replaces the old VertexAIService.
-    """
+class AwsService(LLMProvider):
     _instance = None
 
-    def __init__(self, config: AppConfig):
-        if AwsService._instance is not None:
-            raise Exception("AwsService is a singleton. Use get_instance().")
-        
+    def __init__(self, config):
+        """
+        Private Constructor. Use get_instance() instead.
+        """
         self.config = config
-        self._s3_client = None
-        self._llm = None
-        self._embed_model = None
-        
-       # AWS Configuration Logic
-        # If keys are in the environment (Docker/Prod), don't use a profile.
-        # If no keys, assume local dev and use 'docmail'.
-        if os.getenv("AWS_ACCESS_KEY_ID"):
-            self.profile_name = None 
-        else:
-            self.profile_name = 'docmail'
-            
-        self.session = boto3.Session(profile_name=self.profile_name)
-        self.region = "us-east-1"
-
-        # The ID we just validated
-        self.llm_model_id = "global.anthropic.claude-sonnet-4-5-20250929-v1:0"
-        self.embed_model_id = "amazon.titan-embed-text-v2:0" # Standard, cheap, effective
-
-        AwsService._instance = self
-
-    @staticmethod
-    def get_instance(config: AppConfig = None):
-        if AwsService._instance is None:
-            if config is None:
-                raise ValueError("Config required for first initialization")
-            AwsService(config)
-        return AwsService._instance
-
-    @property
-    def s3_client(self):
-        """Lazy load S3 client"""
-        if self._s3_client is None:
-            self._s3_client = self.session.client('s3', region_name=self.region)
-        return self._s3_client
-
-    @property
-    def llm(self):
-        """Lazy load Bedrock LLM (Claude Sonnet)"""
-        if self._llm is None:
-            logger.info(f"Initializing Bedrock LLM: {self.llm_model_id}")
-            self._llm = Bedrock(
-                model=self.llm_model_id,
-                profile_name=self.profile_name,
-                region_name=self.region,
-                context_size=200000, 
-                temperature=0.7,
-                max_tokens=4096  # <--- FIX: ADD THIS LINE (Was likely defaulting to 512)
-            )
-            # Bind to global Settings for LlamaIndex convenience
-            Settings.llm = self._llm
-        return self._llm
-
-    @property
-    def embed_model(self):
-        """Lazy load Bedrock Embeddings (Titan v2)"""
-        if self._embed_model is None:
-            logger.info(f"Initializing Bedrock Embeddings: {self.embed_model_id}")
-            self._embed_model = BedrockEmbedding(
-                model_name=self.embed_model_id,
-                profile_name=self.profile_name,
-                region_name=self.region
-            )
-            # Bind to global Settings
-            Settings.embed_model = self._embed_model
-        return self._embed_model
-
-    def upload_file(self, file_path: str, object_name: str = None):
-        """Upload a file to the S3 bucket defined in config"""
-        if object_name is None:
-            object_name = file_path.split("/")[-1]
-            
-        bucket = self.config.s3_bucket_name # Ensure config.toml has this key!
+        self.region = config.aws_region
         
         try:
-            self.s3_client.upload_file(file_path, bucket, object_name)
-            logger.info(f"Uploaded {file_path} to s3://{bucket}/{object_name}")
-            return f"s3://{bucket}/{object_name}"
+            # 1. Initialize Boto3 Clients
+            self.bedrock_runtime = boto3.client(
+                service_name="bedrock-runtime", 
+                region_name=self.region
+            )
+            
+            # 2. Initialize Embeddings (Titan v2) - Needed for ChromaDB
+            # We wrap this in LlamaIndex's class for easy integration later
+            self.embed_model = BedrockEmbedding(
+                model_name=config.embed_model_id,
+                client=self.bedrock_runtime
+            )
+            
+            logger.info("✅ AWS Bedrock Clients Initialized")
+            
         except Exception as e:
-            logger.error(f"Failed to upload to S3: {e}")
-            raise
+            logger.critical(f"❌ Failed to connect to AWS Bedrock: {e}")
+            raise e
+
+    @classmethod
+    def get_instance(cls, config):
+        """Singleton Accessor"""
+        if cls._instance is None:
+            cls._instance = cls(config)
+        return cls._instance
+
+    def generate_draft(self, system_prompt: str, user_prompt: str, **kwargs) -> str:
+        """
+        Implementation of the LLMProvider interface for AWS Bedrock (Claude 3/3.5).
+        """
+        logger.info(f"Generating draft via AWS Bedrock ({self.config.llm_model_id})...")
+        
+        # Claude 3 Messages API Payload
+        body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": kwargs.get("max_tokens", 500),
+            "temperature": kwargs.get("temperature", 0.3),
+            "system": system_prompt,
+            "messages": [
+                {
+                    "role": "user", 
+                    "content": [{"type": "text", "text": user_prompt}]
+                }
+            ]
+        })
+        
+        try:
+            response = self.bedrock_runtime.invoke_model(
+                modelId=self.config.llm_model_id,
+                body=body
+            )
+            
+            # Parse Response
+            response_body = json.loads(response.get("body").read())
+            # Extract text from Claude's response structure
+            return response_body["content"][0]["text"]
+            
+        except ClientError as e:
+            logger.error(f"AWS Bedrock API Error: {e}")
+            raise e
+        except Exception as e:
+            logger.error(f"Unexpected Error in AWS Generation: {e}")
+            raise e

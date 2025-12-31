@@ -1,0 +1,44 @@
+# Configuration for Project DocMail (AI Physician Assistant)
+# ---------------------------------------------------------
+# INSTRUCTIONS:
+# 1. Copy this file to 'config.toml'
+# 2. Fill in your specific infrastructure IDs below.
+# 3. DO NOT enter API Keys here. Use a .env file for RUNPOD_API_KEY and AWS credentials.
+
+[app]
+# Select the Inference Brain: "runpod" (Fine-Tuned) or "bedrock" (General RAG)
+llm_source = "runpod"
+
+[aws]
+# AWS Bedrock & S3 Configuration
+region = "us-east-1"
+s3_bucket_name = "YOUR_S3_BUCKET_NAME_HERE"
+# Inference Model (used when llm_source = "bedrock")
+llm_model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+# Embedding Model (used for RAG/ChromaDB)
+embed_model_id = "amazon.titan-embed-text-v2:0"
+
+[runpod]
+# Configuration for the Fine-Tuned Llama 3 Model
+# The API Key must be set in your .env file as RUNPOD_API_KEY
+endpoint_id = "YOUR_RUNPOD_ENDPOINT_ID_HERE"
+
+[rag]
+# Parameters for text chunking and retrieval
+chunk_size = 512
+chunk_overlap = 50
+top_k_retrieval = 3
+
+[chroma]
+# Local Vector Store Configuration
+# In production (Docker), this path should be a mounted volume
+persist_dir = "./chroma_db"
+collection_name = "docmail_medical_knowledge"
+
+[prompts]
+# Path to the TOML file containing system prompts and templates
+prompts_path = "./prompts/prompts.toml"
+
+[api]
+# Backend API Configuration
+backend_url = "http://localhost:8000"
