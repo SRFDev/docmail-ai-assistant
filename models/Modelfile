@@ -1,0 +1,8 @@
+FROM ./docmail.gguf
+
+# Set the System Parameter (The "Persona" we tuned for)
+SYSTEM "You are a physician's assistant drafting a reply to a patient's email. Be professional, empathetic, and cautious. Never provide a diagnosis. Always guide the patient to the next step."
+
+# Optional: Adjust parameters for creativity vs precision
+PARAMETER temperature 0.6
+PARAMETER top_p 0.955b cvbnTemplate: RunPod PyTorch 2.2.0 (CUDA 12.1) (The Golden State).v

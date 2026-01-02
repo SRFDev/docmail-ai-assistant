@@ -9,7 +9,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# upgrade pip to ensure wheel compatibility for awscrt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # --- Stage 2: The "Runner" ---
 FROM python:3.12-slim-bookworm AS runner
@@ -31,12 +33,11 @@ COPY --chown=appuser:appgroup backend ./backend
 COPY --chown=appuser:appgroup core ./core
 COPY --chown=appuser:appgroup config ./config
 COPY --chown=appuser:appgroup prompts ./prompts
+COPY --chown=appuser:appgroup data ./data
 
-# --- DOCMAIL SPECIFIC: THE KNOWLEDGE BASE ---
-# We bake the Vector Database directly into the image.
-# This makes the deployment "Immutable" (Read-Only Logic).
-# We ensure the appuser owns it so Chroma can write lock-files if needed.
-COPY --chown=appuser:appgroup chroma_db ./chroma_db
+# (Optional) ChromaDB is currently ignored in .dockerignore for the 'Hybrid' demo.
+# If you want to bake it in later, remove it from .dockerignore and uncomment this:
+# COPY --chown=appuser:appgroup chroma_db ./chroma_db
 
 # Switch to non-root user
 USER appuser
