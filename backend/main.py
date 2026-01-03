@@ -47,21 +47,22 @@ async def lifespan(app: FastAPI):
         app.state.aws = AwsService.get_instance(app.state.config)
     except Exception as e:
         logger.error(f"AWS Init Failed (Embeddings will be unavailable): {e}")
+        app.state.aws = None
 
-    # 3. Initialize The LLM Strategy (The "Switch")
-    source = app.state.config.llm_source
-    logger.info(f"INFO:     Selected LLM Strategy: {source.upper()}")
-
-    if source == "runpod":
-        # Strategy A: Fine-Tuned Model
-        app.state.llm_client = RunPodService(
-            api_key=app.state.config.runpod_api_key,
-            endpoint_id=app.state.config.runpod_endpoint_id
-        )
-    else:
-        # Strategy B: General Bedrock Model
-        # Since AwsService implements LLMProvider, we just point to the existing instance
-        app.state.llm_client = app.state.aws
+    # 3. Initialize RunPod Service (Always load if keys exist)
+    try:
+        if app.state.config.runpod_api_key and app.state.config.runpod_endpoint_id:
+            logger.info("INFO:     Initializing RunPod Service...")
+            app.state.runpod = RunPodService(
+                api_key=app.state.config.runpod_api_key,
+                endpoint_id=app.state.config.runpod_endpoint_id
+            )
+        else:
+            logger.warning("WARNING: RunPod credentials missing. Service unavailable.")
+            app.state.runpod = None
+    except Exception as e:
+        logger.error(f"RunPod Init Failed: {e}")
+        app.state.runpod = None
 
     # 4. Connect to Vector Store (RAG)
     try:
@@ -124,36 +125,59 @@ async def generate_draft(request: DraftRequest):
     Uses the configured LLM Provider (RunPod or Bedrock).
     """
     logger.info(f"Generating draft for input length: {len(request.patient_email)}")
-    
-    # 1. Fetch Prompts (Strategy: Use System Prompt from TOML)
-    prompt_manager = get_prompt_manager()
 
-    if app.state.config.llm_source == "runpod":
-        # Use the simple, tuned prompt for the Fine-Tuned Model
-        system_prompt = prompt_manager.get_prompt("docmail", "physician_system_prompt")
-    else:
-        # Use the complex RAG prompt for generic Bedrock/Claude
-        system_prompt = prompt_manager.get_prompt("docmail", "rag_system_prompt")
+    # 1. Determine Strategy
+    # Priority: API Request > Config Default > Default to 'bedrock'
+    requested_source = request.model_source or app.state.config.llm_source
+    requested_source = requested_source.lower()
     
-    # 2. Execute Generation (Polymorphic Call)
+    # Fetch Prompts (Strategy: Use System Prompt from TOML)
+    prompt_manager = get_prompt_manager()
+    client = None
+    system_prompt = ""
+    source_label = ""
+
+    # 2. Select Client
+    if "runpod" in requested_source:
+        if not app.state.runpod:
+            raise HTTPException(status_code=503, detail="RunPod service is not configured or failed to start.")
+        
+        client = app.state.runpod
+        # Use the Fine-Tuned "Physician" Prompt
+        system_prompt = prompt_manager.get_prompt("docmail", "physician_system_prompt")
+        source_label = "Fine-Tuned Llama 3 (RunPod)"
+        
+    else:
+        # Default to Bedrock
+        if not app.state.aws:
+             raise HTTPException(status_code=503, detail="AWS Bedrock service is not configured.")
+             
+        client = app.state.aws
+        # Use the Complex "RAG" Prompt
+        system_prompt = prompt_manager.get_prompt("docmail", "rag_system_prompt")
+        source_label = "Claude 4.5 Sonnet (AWS Bedrock)"
+
+    # 3. Execute
     try:
-        # Note: We are passing 'request.patient_email' as the user prompt.
-        # In the full RAG version, we would append context here.
-        draft_text = app.state.llm_client.generate_draft(
+        logger.info(f"🧠 Routing to: {source_label}")
+        
+        draft_text = client.generate_draft(
             system_prompt=system_prompt,
             user_prompt=request.patient_email,
-            max_tokens=1024,
-            temperature=0.6
+            # Tuning: RunPod likes 0.6 temp, Claude prefers 0.3 for medical
+            temperature=0.6 if "runpod" in requested_source else 0.3,
+            max_tokens=1024
         )
         
         return DraftResponse(
             draft_reply=draft_text,
-            source_nodes=["Fine-Tuned Knowledge" if app.state.config.llm_source == "runpod" else "Bedrock Knowledge"]
+            source_nodes=[source_label] # We will add real RAG nodes here later
         )
         
     except Exception as e:
         logger.error(f"Generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

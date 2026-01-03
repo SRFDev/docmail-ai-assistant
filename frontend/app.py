@@ -1,125 +1,125 @@
-# Copyright © 2025 SRF Development, Inc. All rights reserved.
-# SPDX-License-Identifier: MIT
-
 import streamlit as st
 import requests
-import tomllib  # Use 'tomli' for Python < 3.11 if needed
 import os
+import tomllib
 
-# --- 0. Page Config (Professional Polish) ---
-st.set_page_config(
-    page_title="DocMail Assistant",
-    page_icon="🩺",
-    layout="centered"
-)
+# --- CONFIGURATION & SETUP ---
+st.set_page_config(page_title="DocMail AI", page_icon="🩺", layout="centered")
 
-# --- 1. Centralized Configuration Function ---
 def get_api_url() -> str:
     """
     Determines the correct backend API endpoint URL based on the environment.
     Reads from Streamlit Secrets in production or a local config.toml for development.
     """
-    # Check if running on Streamlit Community Cloud (where secrets are set)
+    # 1. Production: Check Streamlit Secrets
     if "BACKEND_URL" in st.secrets:
         backend_url = st.secrets["BACKEND_URL"]
-        # print(f"Using backend URL from Streamlit secrets: {backend_url}")
-    else:
-        # Fallback for local development
-        # print("Loading backend URL from local config.toml")
-        try:
-            # Assumes your streamlit app is run from the 'docmail' project root
-            config_path = "config/config.toml" 
-            # Note: Depending on where you run 'streamlit run', this path might vary.
-            # If running from root, "config/config.toml" is correct.
-            # If running from frontend/, "../config/config.toml" is correct.
-            # We'll try root first, then fallback.
-            
-            if not os.path.exists(config_path):
-                 config_path = "config.toml" # Try root if config is moved
+        # Safety: Remove trailing slash if present to avoid double-slash errors
+        if backend_url.endswith("/"):
+            backend_url = backend_url[:-1]
+        return f"{backend_url}/generate"
 
-            with open(config_path, "rb") as f:
-                config = tomllib.load(f)
-            backend_url = config.get("api", {}).get("backend_url", "http://127.0.0.1:8000")
-        except FileNotFoundError:
-            backend_url = "http://127.0.0.1:8000"
+    # 2. Development: Fallback to local config
+    try:
+        # Check root first, then relative path
+        config_path = "config.toml" if os.path.exists("config.toml") else "config/config.toml"
+        
+        with open(config_path, "rb") as f:
+            config = tomllib.load(f)
+        
+        # Default to localhost if config is missing keys
+        backend_url = config.get("api", {}).get("backend_url", "http://127.0.0.1:8000")
+        return f"{backend_url}/generate"
+        
+    except FileNotFoundError:
+        # Ultimate fallback
+        return "http://127.0.0.1:8000/generate"
+
+# Initialize URL
+API_URL = get_api_url()
+
+# --- SIDEBAR: SETTINGS ---
+with st.sidebar:
+    st.image("https://img.icons8.com/color/96/doctor-male--v1.png", width=80)
+    st.title("Settings")
     
-    # Append the DocMail specific endpoint
-    return f"{backend_url}/generate"
+    st.markdown("### 🧠 AI Model Source")
+    model_choice = st.radio(
+        "Choose your Physician:",
+        ("Fine-Tuned Llama 3 (RunPod)", "Claude 4.5 Sonnet (AWS Bedrock)"),
+        index=0,
+        help="Switch between the specialized local model (RunPod) and the generic cloud model (AWS)."
+    )
+    
+    # Map selection to API parameter
+    # "runpod" matches the check in backend/main.py
+    api_source = "runpod" if "RunPod" in model_choice else "bedrock"
+    
+    st.divider()
+    st.info(f"**Backend:** `{api_source.upper()}`")
+    st.caption(f"Target: {API_URL}")
 
-# --- 2. Main Application ---
-st.title("DocMail Assistant 🩺")
+# --- MAIN UI ---
+st.title("🩺 DocMail AI Assistant")
 st.markdown("""
-**Physician's Email Draft Tool**  
-Paste a patient email below. DocMail will retrieve similar past replies and draft a response using your established style and safety guidelines.
+**Patient Triage & Response System**  
+*Enter a patient message below to generate a clinically appropriate draft response.*
 """)
 
-# Get the endpoint URL ONCE at the start
-API_URL = get_api_url()
-# st.sidebar.info(f"Connected to: `{API_URL}`") # Debug info
+# Input Area
+email_input = st.text_area(
+    "Patient Message:", 
+    height=150, 
+    placeholder="Doctor, I missed my dose of Metoprolol this morning. Should I double up now? It is 2pm."
+)
 
-# --- 3. Initialize chat history ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-# --- 4. Display past messages ---
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        # Display sources for assistant messages if available
-        if message["role"] == "assistant" and "sources" in message:
-            sources = message["sources"]
-            if sources:
-                with st.expander(f"📚 References ({len(sources)})"):
-                    for source in sources:
-                        st.write(f"- {source}")
-
-# --- 5. User Input ---
-if prompt := st.chat_input("Paste patient email here..."):
-    # Add user message to history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    # --- 6. Backend Interaction ---
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
+# Action Button
+if st.button("Generate Draft Response", type="primary"):
+    if not email_input:
+        st.warning("⚠️ Please enter a patient message to proceed.")
+    else:
+        # Dynamic Spinner Text
+        spinner_text = "Consulting the Specialist (RunPod GPU)..." if api_source == "runpod" else "Consulting General Medicine (AWS Bedrock)..."
         
-        with st.spinner("Analyzing style and drafting reply..."):
+        with st.spinner(spinner_text):
             try:
-                # DocMail API call
-                payload = {"patient_email": prompt}
-                response = requests.post(API_URL, json=payload)
-
+                # 1. Construct Payload with the Model Switch
+                payload = {
+                    "patient_email": email_input,
+                    "model_source": api_source  # <--- The New Switch
+                }
+                
+                # 2. Call Backend
+                response = requests.post(API_URL, json=payload, timeout=90)
+                
                 if response.status_code == 200:
                     data = response.json()
+                    draft = data.get("draft_reply", "No text returned.")
+                    sources = data.get("source_nodes", ["Unknown Source"])
                     
-                    # Extract fields from DraftResponse schema
-                    draft = data.get("draft_reply", "Error: No draft returned.")
-                    sources = data.get("source_nodes", [])
+                    # 3. Display Result
+                    st.subheader("Draft Reply")
+                    st.text_area("Review & Edit:", value=draft, height=350)
                     
-                    # Display the Draft
-                    message_placeholder.markdown(draft)
-                    
-                    # Display Sources (The backend formats them as strings now)
-                    if sources:
-                        with st.expander(f"📚 References ({len(sources)})"):
-                            for source in sources:
-                                st.write(f"- {source}")
-                    
-                    # Save to History
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": draft, 
-                        "sources": sources
-                    })
-
+                    # 4. Source Analysis (RAG/Model Info)
+                    with st.expander("🔍 Source Analysis & Logic", expanded=True):
+                        st.markdown(f"**Generated by:** `{sources[0]}`")
+                        if len(sources) > 1:
+                            st.markdown("**Reference Context:**")
+                            for src in sources[1:]:
+                                st.markdown(f"- {src}")
+                                
                 else:
-                    error_msg = f"**Error {response.status_code}:** {response.text}"
-                    message_placeholder.error(error_msg)
-                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
-            
-            except requests.exceptions.RequestException as e:
-                error_msg = f"**Connection Error:** Could not reach backend at {API_URL}.\n\nDetails: {e}"
-                message_placeholder.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
-# --- End of app.py ---
+                    st.error(f"**Server Error:** {response.status_code}")
+                    st.code(response.text)
+
+            except requests.exceptions.ConnectionError:
+                st.error("❌ Could not connect to the Backend. Is the Docker Container running?")
+            except requests.exceptions.Timeout:
+                st.error("⏳ Request Timed Out. The GPU might be cold-starting. Please try again.")
+            except Exception as e:
+                st.error(f"An unexpected error occurred: {e}")
+
+# Footer
+st.markdown("---")
+st.caption("© 2026 SRF Development | DocMail MVP | Powered by Unsloth & AWS App Runner")
